@@ -16,24 +16,26 @@ jobs:
           'macos-15-intel', 'macos-15'
         ]
       fail-fast: false
+    env:
+      UV_SYSTEM_PYTHON: 1
 
     steps:
     - uses: actions/checkout@v6
 
     - uses: actions/setup-python@v6
       with:
-        python-version: '3.13'
+        python-version-file: "pyproject.toml"
 
-    - name: Dependencies
-      run: pip3 install --requirement requirements.txt
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
 
-    - name: Build tools
-      run: pip3 install --upgrade
-        setuptools
-        pyinstaller
+    - name: Dependencies and build tools
+      run: uv sync --extra pyinstaller_build --no-install-local
 
     - name: Optional dependencies (WebView)
-      run: pip3 install --upgrade pywebview
+      run: uv sync --extra webview --no-install-local --inexact
       if: runner.os != 'macOS'
 
     - name: Set strip option on non-Windows
@@ -43,7 +45,7 @@ jobs:
 
     - name: Build
       working-directory: legendary
-      run: pyinstaller
+      run: uv run --module PyInstaller
         --onefile
         --name legendary
         ${{ steps.strip.outputs.option }}
@@ -71,14 +73,18 @@ jobs:
 
     - uses: actions/setup-python@v6
       with:
-        python-version: '3.13'
+        python-version-file: "pyproject.toml"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
 
     - run: mkdir -p build dist
 
     - name: Dependencies
-      run: pip3 install --requirement requirements.txt --target build
+      run: uv export --format requirements.txt --no-editable | uv pip install --requirement - --target build
 
-    - run: cp -r legendary build
     - run: cp zipapp_main.py build/__main__.py
 
     - name: Build
@@ -91,4 +97,4 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: ${{ runner.os }}-${{ runner.arch }}-package
-        path: dist/*
+        path: dist/legendary
