@@ -360,6 +360,11 @@ class LegendaryCore:
                 ]
             })
 
+            # only get entitlements if there was an asset update
+            if self.lgd.assets != assets or not self.lgd.entitlements:
+                self.log.info('Updating entitlements.')
+                self.lgd.entitlements = self.egs.get_user_entitlements_full()
+
             # only save (and write to disk) if there were changes
             if self.lgd.assets != assets:
                 self.lgd.assets = assets

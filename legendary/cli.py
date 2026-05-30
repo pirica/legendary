@@ -1653,7 +1653,7 @@ class LegendaryCLI:
             args.offline = True
 
         manifest_data = None
-        entitlements = None
+        entitlements = []
         is_preloaded = False
         manifest_secrets = dict()
         # load installed manifest or URI
@@ -1670,7 +1670,7 @@ class LegendaryCLI:
             else:
                 logger.info('Game not installed and offline mode enabled, cannot load manifest.')
         elif game:
-            entitlements = self.core.egs.get_user_entitlements_full()
+            entitlements = self.core.lgd.entitlements if self.core.lgd.entitlements else []
             egl_meta = self.core.egs.get_game_info(game.namespace, game.catalog_item_id)
             game.metadata = egl_meta
             # Get manifest if asset exists for current platform
@@ -1684,6 +1684,10 @@ class LegendaryCLI:
                                        game.app_version(args.platform)))
             all_versions = {k: v.build_version for k, v in game.asset_infos.items()}
             game_infos.append(InfoItem('All versions', 'platform_versions', all_versions, all_versions))
+            # Grant date from entitlements
+            entitlement = next((ent for ent in entitlements if ent['namespace'] == game.namespace), None)
+            grant_date = entitlement["grantDate"] if entitlement else game.metadata["creationDate"]
+            game_infos.append(InfoItem('Grant date', 'grant_date', grant_date, grant_date))
             # Cloud save support for Mac and Windows
             game_infos.append(InfoItem('Cloud saves supported', 'cloud_saves_supported',
                                        game.supports_cloud_saves or game.supports_mac_cloud_saves,
@@ -1731,7 +1735,7 @@ class LegendaryCLI:
             # list all owned DLC based on entitlements
             if entitlements and not game.is_dlc:
                 owned_entitlements = {i['entitlementName'] for i in entitlements}
-                owned_app_names = {g.app_name for g in self.core.get_assets(args.platform)}
+                owned_app_names = {g.app_name for g in self.core.get_assets(platform=args.platform)}
                 owned_dlc = []
                 for dlc in game.metadata.get('dlcItemList', []):
                     installable = dlc.get('releaseInfo', None)
@@ -2063,7 +2067,7 @@ class LegendaryCLI:
             redeemed = {k['gameId'] for k in key_list if k['redeemedOnUplay']}
 
             games = self.core.get_game_list()
-            entitlements = self.core.egs.get_user_entitlements_full()
+            entitlements = self.core.lgd.entitlements if self.core.lgd.entitlements else []
             owned_entitlements = {i['entitlementName'] for i in entitlements}
 
             uplay_games = []
