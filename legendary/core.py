@@ -314,6 +314,95 @@ class LegendaryCore:
 
         return update_info.get('game_wiki', {}).get(app_name, {}).get(sys_platform)
 
+    def get_user_achievements(self, namespace: str, update: bool = False):
+        if not (achievements := self.lgd.achievements):
+            achievements = {}
+
+        if not achievements or not achievements.get(namespace, None) or update:
+            response = self.egs.get_game_achievements_user(namespace)
+            records = response['data']['PlayerAchievement']['playerAchievementGameRecordsBySandbox']['records']
+            achievements[namespace] = None
+            if records:
+                achievements[namespace] = records[0]
+            self.lgd.achievements = achievements
+
+        return self.lgd.achievements[namespace]
+
+    def get_achievements(self, game: Game, update: bool = False):
+        if not game.achievements.achievements:
+            return None
+
+        user_achievements = self.get_user_achievements(game.namespace, update)
+        user_unlocked = {}
+        if user_achievements:
+            user_unlocked = {
+                ach['playerAchievement']['achievementName']: ach['playerAchievement'] for ach in
+                user_achievements['playerAchievements']
+            }
+
+        achievements = {
+            'total_achievements': game.achievements.total_achievements,
+            'total_product_xp': game.achievements.total_product_xp,
+            'achievement_sets': game.achievements.achievement_sets,
+            'platinum_rarity': game.achievements.platinum_rarity,
+            'completed': [],
+            'in_progress': [],
+            'uninitiated': [],
+            'hidden': [],
+        }
+        achievements.update({
+            'user_unlocked': user_achievements['totalUnlocked'] if user_achievements else 0,
+            'user_xp': user_achievements['totalXP'] if user_achievements else 0,
+            'user_awards': user_achievements['playerAwards'] if user_achievements else [],
+        })
+
+        for item in game.achievements.achievements:
+            game_ach = item['achievement']
+            is_unlocked = game_ach['name'] in user_unlocked
+
+            _unlocked = False
+            _progress = 0.0
+            _unlock_date = None
+            if is_unlocked:
+                user_ach = user_unlocked[game_ach['name']]
+                _unlocked = user_ach['unlocked']
+                _progress = float(user_ach['progress'])
+                _unlock_date = user_ach['unlockDate']
+                _unlock_date = datetime.fromisoformat(_unlock_date[:-1]).replace(
+                    tzinfo=timezone.utc) if _unlock_date != "N/A" else None
+
+            data = {
+                'name': game_ach['name'],
+                'is_base': game_ach['isBase'],
+                'hidden': False if is_unlocked else game_ach['hidden'],
+                'xp': game_ach['XP'],
+                'unlocked': _unlocked,
+                'progress': _progress,
+                'unlock_date': _unlock_date if _unlock_date else None,
+                'display_name': game_ach['unlockedDisplayName'] if is_unlocked else game_ach['lockedDisplayName'],
+                'description': game_ach['unlockedDescription'] if is_unlocked else game_ach['lockedDescription'],
+                'icon_id': game_ach['unlockedIconId'] if is_unlocked else game_ach['lockedIconId'],
+                'icon_link': game_ach['unlockedIconLink'] if is_unlocked else game_ach['lockedIconLink'],
+                'tier': game_ach['tier'],
+                'rarity': game_ach['rarity'],
+            }
+
+            if data['unlocked']:
+                achievements['completed'].append(data)
+            elif 0.0 < data['progress'] < 1.0:
+                achievements['in_progress'].append(data)
+            elif not data['hidden'] and data['progress'] == 0.0:
+                achievements['uninitiated'].append(data)
+            elif data['hidden']:
+                achievements['hidden'].append(data)
+
+        achievements['completed'] = sorted(achievements['completed'], key=lambda a: a['unlock_date'], reverse=True)
+        achievements['in_progress'] = sorted(achievements['in_progress'], key=lambda a: a['progress'], reverse=True)
+        achievements['uninitiated'] = sorted(achievements['uninitiated'], key=lambda a: a['xp'], reverse=False)
+        achievements['hidden'] = sorted(achievements['hidden'], key=lambda a: a['xp'], reverse=False)
+
+        return achievements
+
     def get_sdl_data(self, app_name, platform='Windows'):
         if platform not in ('Win32', 'Windows'):
             app_name = f'{app_name}_{platform}'
@@ -436,15 +525,16 @@ class LegendaryCore:
                 continue
 
             game = self.lgd.get_game_meta(app_name)
-            asset_updated = sidecar_updated = False
+            asset_updated = sidecar_updated = achievements_updated = False
             if game:
                 asset_updated = any(game.app_version(_p) != app_assets[_p].build_version for _p in app_assets.keys())
                 # assuming sidecar data is the same for all platforms, just check the baseline (Windows) for updates.
                 sidecar_updated = (app_assets['Windows'].sidecar_rev > 0 and
                                    (not game.sidecar or game.sidecar.rev != app_assets['Windows'].sidecar_rev))
+                achievements_updated = not game.achievements or asset_updated
                 games[app_name] = game
 
-            if update_assets and (not game or force_refresh or (game and (asset_updated or sidecar_updated))):
+            if update_assets and (not game or force_refresh or (game and (asset_updated or sidecar_updated or achievements_updated))):
                 self.log.debug(f'Scheduling metadata update for {app_name}')
                 # namespace/catalog item are the same for all platforms, so we can just use the first one
                 _ga = next(iter(app_assets.values()))
@@ -468,8 +558,12 @@ class LegendaryCore:
                     sidecar_json = json.loads(manifest_info['sidecar']['config'])
                     sidecar = Sidecar(config=sidecar_json, rev=manifest_info['sidecar']['rvn'])
 
+            self.log.debug(f'Updating achivement information for {app_name}...')
+            achievements_api_response = self.egs.get_game_achievements(namespace)
+            achievements = Achievements.from_egs_json(achievements_api_response)
+
             game = Game(app_name=app_name, app_title=eg_meta['title'], metadata=eg_meta, asset_infos=assets[app_name],
-                        sidecar=sidecar)
+                        sidecar=sidecar, achievements=achievements)
             self.lgd.set_game_meta(game.app_name, game)
             games[app_name] = game
             try:
